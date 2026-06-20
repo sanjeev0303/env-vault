@@ -7,12 +7,12 @@
   --color-noir-600: #2A2A2A;
   --color-noir-vein: #3d3d3d;
 
-  --color-vanilla-100: #FDFBF7;
-  --color-vanilla-200: #F4EFE6;
-  --color-vanilla-300: #EAE2D3;
-  --color-vanilla-400: #E5DCC5;
+  --color-vanilla-100: #FFFDF8;
+  --color-vanilla-200: #F5ECD9;
+  --color-vanilla-300: #EBD9B6;
+  --color-vanilla-400: #D9C29A;
 
-  --color-gold-accent: #D4AF37;
+  --color-gold-accent: #C7A332;
 
   --font-serif: var(--font-cormorant);
   --font-sans: var(--font-montserrat);
