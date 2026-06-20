@@ -1,7 +1,10 @@
 package config
 
 import (
+	"log"
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -12,9 +15,13 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, falling back to environment variables")
+	}
+
 	port := getEnv("PORT", "8080")
-	dbURL := getEnv("DATABASE_URL", "postgresql://neondb_owner:npg_g23KeNMfLqwh@ep-quiet-tree-atbnsxzh-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require")
-	masterKey := getEnv("MASTER_KEY", "dev-master-key-change-me-in-production-123456")
+	dbURL := getEnv("DATABASE_URL", "")
+	masterKey := getEnv("MASTER_KEY", "")
 	apiToken := getEnv("API_TOKEN", "")
 
 	return &Config{
