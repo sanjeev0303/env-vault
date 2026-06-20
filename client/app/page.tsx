@@ -187,6 +187,12 @@ export default function Home() {
     navigator.clipboard.writeText(text);
   };
 
+  const copyAllSecrets = () => {
+    if (secrets.length === 0) return;
+    const allEnvString = secrets.map(s => `${s.key.toUpperCase()}=${s.value}`).join('\n');
+    copyToClipboard(allEnvString);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-noir-900 text-vanilla-100 font-sans">
       
@@ -323,17 +329,28 @@ export default function Home() {
           </div>
           
           {selectedEnvironment && (
-            <button 
-              onClick={() => {
-                setEditingSecret(null);
-                setSecretKey("");
-                setSecretValue("");
-                setSecretModalOpen(true);
-              }}
-              className="flex items-center gap-2 bg-noir-800 text-vanilla-100 px-6 py-2 rounded shadow hover:bg-noir-900 transition-colors font-medium border border-noir-600"
-            >
-              <Plus className="w-5 h-5" /> Add Secret
-            </button>
+            <div className="flex items-center gap-3">
+              {secrets.length > 0 && (
+                <button 
+                  onClick={copyAllSecrets}
+                  className="flex items-center gap-2 bg-vanilla-300 text-noir-800 px-5 py-2 rounded shadow hover:bg-vanilla-400 transition-colors font-medium border border-vanilla-400"
+                  title="Copy All Environments"
+                >
+                  <Copy className="w-4 h-4" /> Copy All
+                </button>
+              )}
+              <button 
+                onClick={() => {
+                  setEditingSecret(null);
+                  setSecretKey("");
+                  setSecretValue("");
+                  setSecretModalOpen(true);
+                }}
+                className="flex items-center gap-2 bg-noir-800 text-vanilla-100 px-6 py-2 rounded shadow hover:bg-noir-900 transition-colors font-medium border border-noir-600"
+              >
+                <Plus className="w-5 h-5" /> Add Secret
+              </button>
+            </div>
           )}
         </div>
 
@@ -354,12 +371,12 @@ export default function Home() {
           ) : (
             <div className="bg-white rounded-xl shadow-lg border border-vanilla-300 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full text-left border-collapse table-fixed">
                   <thead>
                     <tr className="bg-vanilla-200 text-noir-600 text-sm uppercase tracking-wider font-semibold border-b border-vanilla-300">
-                      <th className="p-4 pl-6">Key</th>
-                      <th className="p-4">Value</th>
-                      <th className="p-4 text-right pr-6">Actions</th>
+                      <th className="p-4 pl-6 w-1/3">Key</th>
+                      <th className="p-4 w-1/2">Value</th>
+                      <th className="p-4 text-right pr-6 w-1/6">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -382,7 +399,7 @@ export default function Home() {
                           </td>
                           <td className="p-4">
                             <div className="flex items-center gap-3">
-                              <span className="font-mono text-noir-700">
+                              <span className="font-mono text-noir-700 break-all">
                                 {revealedSecrets[secret.id] ? secret.value : '••••••••••••••••'}
                               </span>
                             </div>
