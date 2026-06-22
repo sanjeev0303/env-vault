@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"env-vault/server/internal/domain"
@@ -10,6 +11,7 @@ import (
 
 type ErrorResponse struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 func RespondWithJSON(w http.ResponseWriter, status int, payload interface{}) {
@@ -22,26 +24,36 @@ func RespondWithJSON(w http.ResponseWriter, status int, payload interface{}) {
 
 func RespondWithError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
-	message := "internal server error"
+	message := "an unexpected error occurred"
+	code := "INTERNAL_ERROR"
 
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrNotFound):
 			status = http.StatusNotFound
-			message = err.Error()
+			message = "resource not found"
+			code = "NOT_FOUND"
 		case errors.Is(err, domain.ErrAlreadyExists):
 			status = http.StatusConflict
-			message = err.Error()
+			message = "resource already exists"
+			code = "ALREADY_EXISTS"
 		case errors.Is(err, domain.ErrInvalidInput):
 			status = http.StatusBadRequest
-			message = err.Error()
+			message = "invalid input data"
+			code = "INVALID_INPUT"
 		case errors.Is(err, domain.ErrUnauthorized):
 			status = http.StatusUnauthorized
-			message = err.Error()
+			message = "unauthorized"
+			code = "UNAUTHORIZED"
+		case errors.Is(err, domain.ErrForbidden):
+			status = http.StatusForbidden
+			message = "access denied"
+			code = "FORBIDDEN"
 		default:
-			message = err.Error()
+			// Log internal error but don't expose details
+			log.Printf("internal error: %v", err)
 		}
 	}
 
-	RespondWithJSON(w, status, ErrorResponse{Error: message})
+	RespondWithJSON(w, status, ErrorResponse{Error: message, Code: code})
 }

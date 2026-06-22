@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"env-vault/server/internal/auth"
 	"env-vault/server/internal/config"
 	"env-vault/server/internal/database"
 	"env-vault/server/internal/encryption"
@@ -33,29 +34,55 @@ func main() {
 	defer db.Close()
 	log.Println("Connected to PostgreSQL database")
 
-	// 3. Initialize Encryption Service
+	// 3. Initialize JWT Service
+	jwtService, err := auth.NewJWTService(cfg.JWTKeyDir, cfg.AccessTokenTTL)
+	if err != nil {
+		log.Fatalf("JWT service initialization failed: %v", err)
+	}
+	log.Println("JWT service initialized (RS256)")
+
+	// 4. Initialize Encryption Service
 	encryptor, err := encryption.NewAESEncryptionService(cfg.MasterKey)
 	if err != nil {
 		log.Fatalf("Encryption service initialization failed: %v", err)
 	}
-	log.Println("Encryption service initialized successfully")
+	log.Println("Encryption service initialized")
 
-	// 4. Initialize Repositories
+	// 5. Initialize Repositories
+	userRepo := postgres.NewUserRepository(db)
+	sessionRepo := postgres.NewSessionRepository(db)
+	tokenRepo := postgres.NewRefreshTokenRepository(db)
+	memberRepo := postgres.NewProjectMemberRepository(db)
 	projectRepo := postgres.NewProjectRepository(db)
 	secretRepo := postgres.NewSecretRepository(db)
+	resetRepo := postgres.NewPasswordResetTokenRepository(db)
+	auditRepo := postgres.NewAuditRepository(db)
 
-	// 5. Initialize Services
-	projectSvc := service.NewProjectService(projectRepo)
-	secretSvc := service.NewSecretService(secretRepo, projectRepo, encryptor)
+	// 6. Initialize Services
+	argon2Cfg := auth.Argon2Config{
+		Memory:      cfg.Argon2Memory,
+		Iterations:  cfg.Argon2Iterations,
+		Parallelism: cfg.Argon2Parallelism,
+		SaltLength:  16,
+		KeyLength:   32,
+	}
+	authSvc := service.NewAuthService(userRepo, sessionRepo, tokenRepo, resetRepo, jwtService, argon2Cfg, cfg.RefreshTokenTTL)
+	projectSvc := service.NewProjectService(projectRepo, memberRepo, userRepo)
+	auditSvc := service.NewAuditService(auditRepo)
+	secretSvc := service.NewSecretService(secretRepo, projectRepo, encryptor, auditSvc)
 
-	// 6. Initialize Handlers
+	// 7. Initialize Handlers
+	authHandler := handler.NewAuthHandler(authSvc)
 	projectHandler := handler.NewProjectHandler(projectSvc)
 	secretHandler := handler.NewSecretHandler(secretSvc)
 
-	// 7. Setup Router
-	r := router.NewRouter(projectHandler, secretHandler, cfg.APIToken)
+	// 8. Initialize Middleware
+	mw := handler.NewMiddleware(cfg.APIToken, jwtService, memberRepo)
 
-	// 8. Start HTTP Server with Graceful Shutdown
+	// 9. Setup Router
+	r := router.NewRouter(projectHandler, secretHandler, authHandler, mw, cfg.AllowedOrigins)
+
+	// 10. Start HTTP Server with Graceful Shutdown
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      r,

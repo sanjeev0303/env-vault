@@ -25,13 +25,56 @@ export interface Secret {
   updated_at: string;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  is_superadmin: boolean;
+}
+
+export interface AuthResp {
+  access_token: string;
+  expires_in: number;
+  user: User;
+}
+
+let csrfToken: string | null = null;
+
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  // Attach token from localStorage
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const method = options?.method || "GET";
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...options?.headers as Record<string, string>,
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method.toUpperCase())) {
+    if (!csrfToken) {
+      try {
+        const csrfRes = await fetch(`${API_BASE}/auth/csrf`, { credentials: "include" });
+        if (csrfRes.ok) {
+          const data = await csrfRes.json();
+          csrfToken = data.csrf_token;
+        }
+      } catch (e) {
+        console.error("Failed to fetch CSRF token", e);
+      }
+    }
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
+  }
+
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
+    headers,
+    credentials: "include",
   });
 
   if (!res.ok) {
@@ -39,9 +82,17 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
     try {
       const errorData = await res.json();
       errorMessage = errorData.error || errorMessage;
-    } catch (e) {
+    } catch (_) {
       errorMessage = res.statusText;
     }
+
+    // Clear token on 401
+    if (res.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('access_token');
+      // Trigger a custom event to tell the app we're logged out
+      window.dispatchEvent(new Event('auth-error'));
+    }
+
     throw new Error(errorMessage);
   }
 
@@ -52,6 +103,23 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
 
   return res.json();
 }
+
+// Auth API
+export const authApi = {
+  login: (credentials: Record<string, string>) => fetchAPI<AuthResp>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(credentials),
+  }),
+  register: (data: Record<string, string>) => fetchAPI<User>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }),
+  me: () => fetchAPI<User>("/auth/me"),
+  reauth: (password: string) => fetchAPI<{ reauth_token: string }>("/auth/reauth", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  }),
+};
 
 // Project API
 export const api = {
@@ -76,7 +144,20 @@ export const api = {
   }),
 
   // Secret API
-  getSecrets: (projectId: string, envId: string) => fetchAPI<Secret[]>(`/projects/${projectId}/environments/${envId}/secrets`),
+  getSecrets: (projectId: string, envId: string, cursor?: string, limit?: number) => {
+    let url = `/projects/${projectId}/environments/${envId}/secrets`;
+    const params = new URLSearchParams();
+    if (cursor) params.append("cursor", cursor);
+    if (limit) params.append("limit", limit.toString());
+    if (params.toString()) url += `?${params.toString()}`;
+    return fetchAPI<{ data: Secret[]; next_cursor: string }>(url);
+  },
+  revealSecret: (projectId: string, envId: string, secretId: string) =>
+    fetchAPI<Secret>(`/projects/${projectId}/environments/${envId}/secrets/${secretId}/reveal`),
+  exportSecrets: (projectId: string, envId: string, reauthToken: string) =>
+    fetchAPI<Record<string, string>>(`/projects/${projectId}/environments/${envId}/secrets/export`, {
+      headers: { "X-Reauth-Token": reauthToken },
+    }),
   createSecret: (projectId: string, envId: string, key: string, value: string) => fetchAPI<Secret>(`/projects/${projectId}/environments/${envId}/secrets`, {
     method: "POST",
     body: JSON.stringify({ key, value }),

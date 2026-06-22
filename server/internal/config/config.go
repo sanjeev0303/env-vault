@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -11,7 +12,20 @@ type Config struct {
 	Port        string
 	DatabaseURL string
 	MasterKey   string
-	APIToken    string
+	APIToken    string // Legacy, kept for backward compat during migration
+
+	// JWT
+	JWTKeyDir       string
+	AccessTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+
+	// Argon2
+	Argon2Memory      uint32
+	Argon2Iterations  uint32
+	Argon2Parallelism uint8
+
+	// CORS
+	AllowedOrigins string
 }
 
 func LoadConfig() *Config {
@@ -23,12 +37,21 @@ func LoadConfig() *Config {
 	dbURL := getEnv("DATABASE_URL", "")
 	masterKey := getEnv("MASTER_KEY", "")
 	apiToken := getEnv("API_TOKEN", "")
+	jwtKeyDir := getEnv("JWT_KEY_DIR", "./keys")
+	allowedOrigins := getEnv("ALLOWED_ORIGINS", "http://localhost:3000")
 
 	return &Config{
-		Port:        port,
-		DatabaseURL: dbURL,
-		MasterKey:   masterKey,
-		APIToken:    apiToken,
+		Port:              port,
+		DatabaseURL:       dbURL,
+		MasterKey:         masterKey,
+		APIToken:          apiToken,
+		JWTKeyDir:         jwtKeyDir,
+		AccessTokenTTL:    15 * time.Minute,
+		RefreshTokenTTL:   30 * 24 * time.Hour,
+		Argon2Memory:      64 * 1024,
+		Argon2Iterations:  3,
+		Argon2Parallelism: 2,
+		AllowedOrigins:    allowedOrigins,
 	}
 }
 

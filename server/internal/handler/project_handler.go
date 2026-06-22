@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -21,12 +20,13 @@ func NewProjectHandler(service service.ProjectService) *ProjectHandler {
 
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	var req dto.CreateProjectReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, err)
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	p, err := h.service.CreateProject(r.Context(), req.Name)
+	userID := GetUserIDFromContext(r.Context())
+	p, err := h.service.CreateProject(r.Context(), req.Name, userID)
 	if err != nil {
 		RespondWithError(w, err)
 		return
@@ -36,7 +36,10 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := h.service.ListProjects(r.Context())
+	userID := GetUserIDFromContext(r.Context())
+	isSuperAdmin := GetIsSuperAdminFromContext(r.Context())
+
+	projects, err := h.service.ListProjects(r.Context(), userID, isSuperAdmin)
 	if err != nil {
 		RespondWithError(w, err)
 		return
@@ -75,8 +78,8 @@ func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectHandler) CreateEnvironment(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	var req dto.CreateEnvReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, err)
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -108,6 +111,83 @@ func (h *ProjectHandler) ListEnvironments(w http.ResponseWriter, r *http.Request
 func (h *ProjectHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	envID := chi.URLParam(r, "envID")
 	err := h.service.DeleteEnvironment(r.Context(), envID)
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	RespondWithJSON(w, http.StatusNoContent, nil)
+}
+
+// Member management handlers
+func (h *ProjectHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	members, err := h.service.ListMembers(r.Context(), projectID)
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	resps := make([]dto.MemberResp, len(members))
+	for i, m := range members {
+		resps[i] = dto.MemberResp{
+			ID:        m.ID,
+			ProjectID: m.ProjectID,
+			UserID:    m.UserID,
+			Role:      string(m.Role),
+			CreatedAt: m.CreatedAt,
+		}
+	}
+
+	RespondWithJSON(w, http.StatusOK, resps)
+}
+
+func (h *ProjectHandler) AddMember(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	var req dto.AddMemberReq
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	member, err := h.service.AddMember(r.Context(), projectID, req.Email, domain.Role(req.Role))
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	RespondWithJSON(w, http.StatusCreated, dto.MemberResp{
+		ID:        member.ID,
+		ProjectID: member.ProjectID,
+		UserID:    member.UserID,
+		Role:      string(member.Role),
+		CreatedAt: member.CreatedAt,
+	})
+}
+
+func (h *ProjectHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	memberUserID := chi.URLParam(r, "memberUserID")
+	var req dto.UpdateMemberReq
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	err := h.service.UpdateMemberRole(r.Context(), projectID, memberUserID, domain.Role(req.Role))
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	RespondWithJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *ProjectHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	memberUserID := chi.URLParam(r, "memberUserID")
+
+	err := h.service.RemoveMember(r.Context(), projectID, memberUserID)
 	if err != nil {
 		RespondWithError(w, err)
 		return

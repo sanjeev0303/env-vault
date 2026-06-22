@@ -24,7 +24,12 @@ type SecretRepository interface {
 	CreateSecret(ctx context.Context, secret *domain.Secret) error
 	GetSecretByID(ctx context.Context, id string) (*domain.Secret, error)
 	GetSecretByKey(ctx context.Context, envID string, key string) (*domain.Secret, error)
-	ListSecrets(ctx context.Context, envID string) ([]*domain.Secret, error)
+	ListSecrets(ctx context.Context, envID string, cursor string, limit int) ([]*domain.Secret, string, error)
 	UpdateSecret(ctx context.Context, secret *domain.Secret) error
 	DeleteSecret(ctx context.Context, id string) error
+
+	// Versioning
+	CreateSecretVersion(ctx context.Context, version *domain.SecretVersion) error
+	ListSecretVersions(ctx context.Context, secretID string) ([]*domain.SecretVersion, error)
+	GetSecretVersion(ctx context.Context, secretID string, version int) (*domain.SecretVersion, error)
 }

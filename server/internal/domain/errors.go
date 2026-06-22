@@ -7,4 +7,6 @@ var (
 	ErrAlreadyExists = errors.New("resource already exists")
 	ErrInvalidInput  = errors.New("invalid input data")
 	ErrUnauthorized  = errors.New("unauthorized access")
+	ErrForbidden     = errors.New("access denied")
+	ErrRateLimited   = errors.New("rate limit exceeded")
 )

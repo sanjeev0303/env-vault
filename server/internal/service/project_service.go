@@ -10,28 +10,74 @@ import (
 	"env-vault/server/internal/repository"
 )
 
+type ProjectService interface {
+	CreateProject(ctx context.Context, name string, ownerUserID string) (*domain.Project, error)
+	GetProject(ctx context.Context, id string) (*domain.Project, error)
+	GetProjectByName(ctx context.Context, name string) (*domain.Project, error)
+	ListProjects(ctx context.Context, userID string, isSuperAdmin bool) ([]*domain.Project, error)
+	DeleteProject(ctx context.Context, id string) error
+
+	CreateEnvironment(ctx context.Context, projectID, name string) (*domain.Environment, error)
+	GetEnvironment(ctx context.Context, id string) (*domain.Environment, error)
+	GetEnvironmentByName(ctx context.Context, projectID, name string) (*domain.Environment, error)
+	ListEnvironments(ctx context.Context, projectID string) ([]*domain.Environment, error)
+	DeleteEnvironment(ctx context.Context, id string) error
+
+	// Member management
+	AddMember(ctx context.Context, projectID, email string, role domain.Role) (*domain.ProjectMember, error)
+	UpdateMemberRole(ctx context.Context, projectID, userID string, role domain.Role) error
+	RemoveMember(ctx context.Context, projectID, userID string) error
+	ListMembers(ctx context.Context, projectID string) ([]*domain.ProjectMember, error)
+}
+
 type projectService struct {
-	repo repository.ProjectRepository
+	repo       repository.ProjectRepository
+	memberRepo repository.ProjectMemberRepository
+	userRepo   repository.UserRepository
 }
 
-func NewProjectService(repo repository.ProjectRepository) ProjectService {
-	return &projectService{repo: repo}
+func NewProjectService(
+	repo repository.ProjectRepository,
+	memberRepo repository.ProjectMemberRepository,
+	userRepo repository.UserRepository,
+) ProjectService {
+	return &projectService{
+		repo:       repo,
+		memberRepo: memberRepo,
+		userRepo:   userRepo,
+	}
 }
 
-func (s *projectService) CreateProject(ctx context.Context, name string) (*domain.Project, error) {
+func (s *projectService) CreateProject(ctx context.Context, name string, ownerUserID string) (*domain.Project, error) {
 	if name == "" {
 		return nil, domain.ErrInvalidInput
 	}
 
+	now := time.Now()
 	p := &domain.Project{
 		ID:        uuid.NewString(),
 		Name:      name,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := s.repo.CreateProject(ctx, p); err != nil {
 		return nil, err
+	}
+
+	// Add creator as owner
+	if ownerUserID != "" {
+		member := &domain.ProjectMember{
+			ID:        uuid.NewString(),
+			ProjectID: p.ID,
+			UserID:    ownerUserID,
+			Role:      domain.RoleOwner,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := s.memberRepo.AddMember(ctx, member); err != nil {
+			return nil, err
+		}
 	}
 
 	return p, nil
@@ -51,8 +97,31 @@ func (s *projectService) GetProjectByName(ctx context.Context, name string) (*do
 	return s.repo.GetProjectByName(ctx, name)
 }
 
-func (s *projectService) ListProjects(ctx context.Context) ([]*domain.Project, error) {
-	return s.repo.ListProjects(ctx)
+func (s *projectService) ListProjects(ctx context.Context, userID string, isSuperAdmin bool) ([]*domain.Project, error) {
+	if isSuperAdmin {
+		return s.repo.ListProjects(ctx)
+	}
+
+	// Get projects the user is a member of
+	projectIDs, err := s.memberRepo.ListUserProjects(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(projectIDs) == 0 {
+		return []*domain.Project{}, nil
+	}
+
+	var projects []*domain.Project
+	for _, id := range projectIDs {
+		p, err := s.repo.GetProjectByID(ctx, id)
+		if err != nil {
+			continue // Skip deleted/missing projects
+		}
+		projects = append(projects, p)
+	}
+
+	return projects, nil
 }
 
 func (s *projectService) DeleteProject(ctx context.Context, id string) error {
@@ -73,12 +142,13 @@ func (s *projectService) CreateEnvironment(ctx context.Context, projectID, name 
 		return nil, err
 	}
 
+	now := time.Now()
 	env := &domain.Environment{
 		ID:        uuid.NewString(),
 		ProjectID: projectID,
 		Name:      name,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := s.repo.CreateEnvironment(ctx, env); err != nil {
@@ -114,4 +184,46 @@ func (s *projectService) DeleteEnvironment(ctx context.Context, id string) error
 		return domain.ErrInvalidInput
 	}
 	return s.repo.DeleteEnvironment(ctx, id)
+}
+
+func (s *projectService) AddMember(ctx context.Context, projectID, email string, role domain.Role) (*domain.ProjectMember, error) {
+	if !domain.ValidRole(string(role)) {
+		return nil, domain.ErrInvalidInput
+	}
+
+	user, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	member := &domain.ProjectMember{
+		ID:        uuid.NewString(),
+		ProjectID: projectID,
+		UserID:    user.ID,
+		Role:      role,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := s.memberRepo.AddMember(ctx, member); err != nil {
+		return nil, err
+	}
+
+	return member, nil
+}
+
+func (s *projectService) UpdateMemberRole(ctx context.Context, projectID, userID string, role domain.Role) error {
+	if !domain.ValidRole(string(role)) {
+		return domain.ErrInvalidInput
+	}
+	return s.memberRepo.UpdateMemberRole(ctx, projectID, userID, role)
+}
+
+func (s *projectService) RemoveMember(ctx context.Context, projectID, userID string) error {
+	return s.memberRepo.RemoveMember(ctx, projectID, userID)
+}
+
+func (s *projectService) ListMembers(ctx context.Context, projectID string) ([]*domain.ProjectMember, error) {
+	return s.memberRepo.ListProjectMembers(ctx, projectID)
 }

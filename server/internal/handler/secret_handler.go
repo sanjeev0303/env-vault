@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"strings"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,8 +24,8 @@ func (h *SecretHandler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 	envID := chi.URLParam(r, "envID")
 
 	var req dto.CreateSecretReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, err)
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -37,54 +35,83 @@ func (h *SecretHandler) CreateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	RespondWithJSON(w, http.StatusCreated, mapSecretToResp(sec))
+	RespondWithJSON(w, http.StatusCreated, mapSecretToMetadata(sec))
 }
 
+// ListSecrets returns metadata only — no secret values.
 func (h *SecretHandler) ListSecrets(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	envID := chi.URLParam(r, "envID")
 
-	secrets, err := h.service.ListSecrets(r.Context(), projectID, envID)
+	cursor := r.URL.Query().Get("cursor")
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50 // default
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	secrets, nextCursor, err := h.service.ListSecrets(r.Context(), projectID, envID, cursor, limit)
 	if err != nil {
 		RespondWithError(w, err)
 		return
 	}
 
-	formatParam := r.URL.Query().Get("format")
-	acceptHeader := r.Header.Get("Accept")
+	resps := make([]dto.SecretMetadataResp, len(secrets))
+	for i, s := range secrets {
+		resps[i] = mapSecretToMetadata(s)
+	}
 
-	if formatParam == "env" || strings.Contains(acceptHeader, "text/plain") {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
+	// Returning a paginated structure
+	RespondWithJSON(w, http.StatusOK, map[string]interface{}{
+		"data":        resps,
+		"next_cursor": nextCursor,
+	})
+}
 
-		for _, s := range secrets {
-			val := s.Value
-			if strings.ContainsAny(val, " \t\n\r\"'\\#") {
-				escaped := strings.ReplaceAll(val, "\\", "\\\\")
-				escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
-				escaped = strings.ReplaceAll(escaped, "\n", "\\n")
-				escaped = strings.ReplaceAll(escaped, "\r", "\\r")
-				val = fmt.Sprintf("\"%s\"", escaped)
-			}
-			_, _ = fmt.Fprintf(w, "%s=%s\n", s.Key, val)
-		}
+// RevealSecret decrypts and returns a single secret value.
+func (h *SecretHandler) RevealSecret(w http.ResponseWriter, r *http.Request) {
+	secretID := chi.URLParam(r, "secretID")
+
+	sec, err := h.service.RevealSecret(r.Context(), secretID)
+	if err != nil {
+		RespondWithError(w, err)
 		return
 	}
 
-	resps := make([]dto.SecretResp, len(secrets))
-	for i, s := range secrets {
-		resps[i] = mapSecretToResp(s)
+	RespondWithJSON(w, http.StatusOK, dto.SecretRevealResp{
+		ID:            sec.ID,
+		ProjectID:     sec.ProjectID,
+		EnvironmentID: sec.EnvironmentID,
+		Key:           sec.Key,
+		Value:         sec.Value,
+		Version:       sec.Version,
+		CreatedAt:     sec.CreatedAt,
+		UpdatedAt:     sec.UpdatedAt,
+	})
+}
+
+// ExportSecrets exports all secrets for an environment (requires reauth)
+func (h *SecretHandler) ExportSecrets(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+	envID := chi.URLParam(r, "envID")
+
+	secretsMap, err := h.service.ExportSecrets(r.Context(), projectID, envID)
+	if err != nil {
+		RespondWithError(w, err)
+		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, resps)
+	RespondWithJSON(w, http.StatusOK, secretsMap)
 }
 
 func (h *SecretHandler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
 	secretID := chi.URLParam(r, "secretID")
 
 	var req dto.UpdateSecretReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		RespondWithError(w, err)
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -94,7 +121,7 @@ func (h *SecretHandler) UpdateSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	RespondWithJSON(w, http.StatusOK, mapSecretToResp(sec))
+	RespondWithJSON(w, http.StatusOK, mapSecretToMetadata(sec))
 }
 
 func (h *SecretHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
@@ -109,13 +136,53 @@ func (h *SecretHandler) DeleteSecret(w http.ResponseWriter, r *http.Request) {
 	RespondWithJSON(w, http.StatusNoContent, nil)
 }
 
-func mapSecretToResp(s *domain.Secret) dto.SecretResp {
-	return dto.SecretResp{
+func (h *SecretHandler) GetSecretHistory(w http.ResponseWriter, r *http.Request) {
+	secretID := chi.URLParam(r, "secretID")
+
+	versions, err := h.service.GetSecretHistory(r.Context(), secretID)
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	resps := make([]dto.SecretVersionResp, len(versions))
+	for i, v := range versions {
+		resps[i] = dto.SecretVersionResp{
+			ID:        v.ID,
+			SecretID:  v.SecretID,
+			Version:   v.Version,
+			CreatedAt: v.CreatedAt,
+		}
+	}
+
+	RespondWithJSON(w, http.StatusOK, resps)
+}
+
+func (h *SecretHandler) RollbackSecret(w http.ResponseWriter, r *http.Request) {
+	secretID := chi.URLParam(r, "secretID")
+
+	var req dto.RollbackReq
+	if err := ParseAndValidate(r, &req); err != nil {
+		RespondWithJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+
+	sec, err := h.service.RollbackSecret(r.Context(), secretID, req.Version)
+	if err != nil {
+		RespondWithError(w, err)
+		return
+	}
+
+	RespondWithJSON(w, http.StatusOK, mapSecretToMetadata(sec))
+}
+
+func mapSecretToMetadata(s *domain.Secret) dto.SecretMetadataResp {
+	return dto.SecretMetadataResp{
 		ID:            s.ID,
 		ProjectID:     s.ProjectID,
 		EnvironmentID: s.EnvironmentID,
 		Key:           s.Key,
-		Value:         s.Value,
+		Version:       s.Version,
 		CreatedAt:     s.CreatedAt,
 		UpdatedAt:     s.UpdatedAt,
 	}
